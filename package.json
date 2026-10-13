@@ -1,0 +1,5 @@
+{
+  "name": "ebisa-bingo-backend",
+  "private": true,
+  "devDependencies": { "wrangler": "^3.99.0" }
+}
