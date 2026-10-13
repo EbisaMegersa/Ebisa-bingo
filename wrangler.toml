@@ -1,0 +1,8 @@
+name = "ebisa-bingo-backend"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ebisa-db"
+database_id = "98914468-1bae-4a35-8d73-6dc1f9d9f45c"
