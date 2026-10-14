@@ -322,4 +322,4 @@ async function handleApi(request, env, url) {
     return json({ ok: true, list });
   }
   return json({ ok: false, error: 'not_found' }, 404);
-  }
+}
