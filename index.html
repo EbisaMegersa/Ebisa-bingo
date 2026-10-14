@@ -58,6 +58,7 @@ h1{font-size:26px}.logo{color:var(--acc)}.sub{color:var(--dim);font-size:13px;ma
 <div id="s-home" class="screen">
   <h1>🎱 <span class="logo">EBISA</span> BINGO</h1>
   <p class="sub">75-ball live rooms • tap to daub • first line wins</p>
+  <div id="whoami" class="small" style="margin:4px 2px 8px"></div>
   <div class="stat3">
     <div><b id="st-pts">0</b><span>POINTS</span></div>
     <div><b id="st-wins">0</b><span>WINS</span></div>
@@ -77,12 +78,19 @@ h1{font-size:26px}.logo{color:var(--acc)}.sub{color:var(--dim);font-size:13px;ma
 <div id="confetti"></div>
 
 <script>
-const API = 'https://ebisa-bingo-backend.ebisamagarsaa.workers.dev';   /* e.g. 'https://ebisa-bingo-backend.yourname.workers.dev' */
+const API = 'https://ebisa-bingo-backend.ebisamagarsaa.workers.dev';
 const MAXC = 3, LT = ['B','I','N','G','O'];
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 const INIT = (tg && tg.initData) || '';
-let me = null, inRoom = null, pollT = null, state = null;
+const inTG = !!INIT;
+let GTOK = localStorage.getItem('ebisaGuest');
+if (!GTOK) {
+  const a = new Uint8Array(24); crypto.getRandomValues(a);
+  GTOK = [...a].map(x => x.toString(16).padStart(2, '0')).join('');
+  localStorage.setItem('ebisaGuest', GTOK);
+}
+let me = null, isGuest = false, inRoom = null, pollT = null, state = null;
 let lastDrawnLen = 0, lastStatus = '', daubBusy = false;
 let autoD = localStorage.getItem('ebisaAuto') === '1';
 
@@ -101,7 +109,7 @@ function confetti() {
   }
 }
 async function api(path, opts = {}) {
-  const r = await fetch(API + path, { ...opts, headers: { 'Content-Type': 'application/json', 'x-init-data': INIT } });
+  const r = await fetch(API + path, { ...opts, headers: { 'Content-Type': 'application/json', 'x-init-data': INIT, 'x-guest-token': GTOK } });
   const d = await r.json().catch(() => ({ ok: false, error: 'bad_response' }));
   if (!r.ok || d.ok === false) throw d; return d;
 }
@@ -109,10 +117,10 @@ async function api(path, opts = {}) {
 /* ---------- home ---------- */
 function boot() { show('s-load'); loadHome(); }
 async function loadHome() {
-  try { const d = await api('/api/lobby'); me = d.me; renderHome(d); }
+  try { const d = await api('/api/lobby'); me = d.me; isGuest = !!d.isGuest; renderHome(d); }
   catch (e) {
     if ($('s-load').classList.contains('active'))
-      $('s-load').innerHTML = '<p class="waitdots">⚠️ ' + (e.error || 'Cannot connect') + '.<br>Open this app from the bot in Telegram.</p>';
+      $('s-load').innerHTML = '<p class="waitdots">⚠️ ' + (e.error || 'Cannot connect') + '.<br>Check your internet and reload.</p>';
     else toast('Reconnecting…');
   }
 }
@@ -120,6 +128,9 @@ setInterval(() => { if (inRoom === null && $('s-home').classList.contains('activ
 
 async function renderHome(d) {
   $('st-pts').textContent = me.points; $('st-wins').textContent = me.wins; $('st-games').textContent = me.games;
+  $('whoami').innerHTML = isGuest
+    ? '👤 ' + esc(me.name || 'Guest') + ' · guest · <span style="color:var(--acc);text-decoration:underline" onclick="setName()">rename</span>'
+    : '👤 ' + esc(me.name || 'Player');
   $('rooms').innerHTML = d.rooms.map(r => {
     const tag = r.status === 'WAITING' ? '<span class="tag g">OPEN</span>'
       : r.status === 'COUNTDOWN' ? '<span class="tag y">STARTING</span>'
@@ -139,6 +150,12 @@ async function renderHome(d) {
   show('s-home');
 }
 
+async function setName() {
+  const n = prompt('Your display name:');
+  if (!n) return;
+  try { await api('/api/setname', { method: 'POST', body: JSON.stringify({ name: n }) }); loadHome(); }
+  catch (e) { toast(e.error || 'Failed'); }
+}
 async function quickJoin() { try { const d = await api('/api/join', { method: 'POST', body: '{}' }); enterRoom(d.room_id); } catch (e) { toast(e.error || 'No open room'); loadHome(); } }
 async function joinRoom(id) { try { await api('/api/join', { method: 'POST', body: JSON.stringify({ room_id: id }) }); enterRoom(id); } catch (e) { toast(e.error || 'Cannot join'); loadHome(); } }
 async function addCartela() { try { await api('/api/addcartela', { method: 'POST', body: JSON.stringify({ room_id: inRoom }) }); poll(); } catch (e) { toast(e.error || 'Failed'); } }
