@@ -1,6 +1,7 @@
 /* ============================================================
    Ebisa Bingo — backend (Cloudflare Worker + D1)
    75-ball • 300 cartelas/room • manual daub • server-verified
+   Works in Telegram (verified account) AND any browser (guest)
    Secrets: BOT_TOKEN, WEBAPP_URL   |   D1 binding: DB
    ============================================================ */
 
@@ -34,7 +35,7 @@ export default {
 };
 
 /* ---------- helpers ---------- */
-const CH = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'content-type,x-init-data' };
+const CH = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'content-type,x-init-data,x-guest-token' };
 function cors(r) { for (const k in CH) r.headers.set(k, CH[k]); return r; }
 function json(o, s = 200) { return cors(new Response(JSON.stringify(o), { status: s, headers: { 'Content-Type': 'application/json' } })); }
 const now = () => Date.now();
@@ -158,11 +159,28 @@ async function ensureRooms(env) {
 async function handleApi(request, env, url) {
   const path = url.pathname;
   if (path === '/api/ping') return json({ ok: true });
-  const tgu = await checkInitData(request.headers.get('x-init-data') || '', env.BOT_TOKEN);
-  if (!tgu) return json({ ok: false, error: 'auth_failed' }, 401);
-  const name = ((tgu.first_name || '') + ' ' + (tgu.last_name || '')).trim() || ('Player' + tgu.id);
-  await env.DB.prepare('INSERT INTO users (telegram_id,name) VALUES (?,?) ON CONFLICT(telegram_id) DO UPDATE SET name=excluded.name').bind(tgu.id, name).run();
-  await ensureRooms(env);
+
+  /* auth: Telegram user OR browser guest */
+  let isGuest = false;
+  let tgu = await checkInitData(request.headers.get('x-init-data') || '', env.BOT_TOKEN);
+  if (tgu) {
+    const n = ((tgu.first_name || '') + ' ' + (tgu.last_name || '')).trim() || ('Player' + tgu.id);
+    await env.DB.prepare('INSERT INTO users (telegram_id,name) VALUES (?,?) ON CONFLICT(telegram_id) DO UPDATE SET name=excluded.name').bind(tgu.id, n).run();
+    tgu = { id: tgu.id, name: n };
+  } else {
+    isGuest = true;
+    const tok = request.headers.get('x-guest-token') || '';
+    if (tok.length < 32) return json({ ok: false, error: 'auth_failed' }, 401);
+    let g = await env.DB.prepare('SELECT telegram_id,name FROM users WHERE token=?').bind(tok).first();
+    if (!g) {
+      const h = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(tok)));
+      const gid = Number((BigInt('0x' + h.slice(0, 12)) % 999999999999n) + 9000000000000n);
+      await env.DB.prepare('INSERT OR IGNORE INTO users (telegram_id,name,token) VALUES (?,?,?)').bind(gid, 'Guest-' + String(gid).slice(-4), tok).run();
+      g = await env.DB.prepare('SELECT telegram_id,name FROM users WHERE token=?').bind(tok).first();
+    }
+    tgu = { id: g.telegram_id, name: g.name };
+  }
+  const name = tgu.name;
 
   /* lobby */
   if (path === '/api/lobby' && request.method === 'GET') {
@@ -173,8 +191,8 @@ async function handleApi(request, env, url) {
       const mine = (await env.DB.prepare('SELECT COUNT(*) n FROM players WHERE room_id=? AND user_id=?').bind(r.id, tgu.id).first()).n;
       out.push({ id: r.id, status: r.status, players: cnt, in_room: !!mine, round_no: r.round_no });
     }
-    const me = await env.DB.prepare('SELECT points,games,wins FROM users WHERE telegram_id=?').bind(tgu.id).first();
-    return json({ ok: true, rooms: out, me });
+    const me = await env.DB.prepare('SELECT name,points,games,wins FROM users WHERE telegram_id=?').bind(tgu.id).first();
+    return json({ ok: true, rooms: out, me, isGuest });
   }
 
   /* join a room (auto-picks the fullest open room; no room creation) */
@@ -289,9 +307,19 @@ async function handleApi(request, env, url) {
       you: { in_room, cartelas } });
   }
 
+  /* rename guest account */
+  if (path === '/api/setname' && request.method === 'POST') {
+    if (!isGuest) return json({ ok: false, error: 'Telegram users keep their Telegram name' });
+    const b = await request.json().catch(() => ({}));
+    const n = String(b.name || '').trim().slice(0, 20);
+    if (!n) return json({ ok: false, error: 'Name required' });
+    await env.DB.prepare('UPDATE users SET name=? WHERE telegram_id=?').bind(n, tgu.id).run();
+    return json({ ok: true, name: n });
+  }
+
   if (path === '/api/leaderboard' && request.method === 'GET') {
     const list = (await env.DB.prepare('SELECT name,points,wins FROM users ORDER BY points DESC LIMIT 20').all()).results;
     return json({ ok: true, list });
   }
   return json({ ok: false, error: 'not_found' }, 404);
-}
+  }
